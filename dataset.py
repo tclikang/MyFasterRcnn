@@ -28,6 +28,7 @@ class my_dataset(torch.utils.data.dataset.Dataset):
         img_resized = ttf.to_tensor(img_resized)  # 将图像放入tensor,归一化到0-1,n c h w
         cls_name = np.array(cls_name)
         bb_resized = np.array(bb_resized)
+        # 返回一个600 800的图片,返回类别的名字,返回对应bb的位置
         return img_resized, cls_name, bb_resized
 
     def __len__(self):

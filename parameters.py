@@ -14,8 +14,13 @@ class Parameters:
                             [-248., -248., 263., 263.],
                             [-36., -80., 51., 95.],
                             [-80., -168., 95., 183.],
-                            [-168., -344., 183., 359.]]) - 7
-    anchor_start_point = np.array([7, 7])  # 因为下标从0开始,所以起始坐标是7 7
+                            [-168., -344., 183., 359.]]) - 7.5
+    train_rpn_proposal_num_to_fastrcnn = 6000  # 先用于预选择的有6000个
+    train_rpn_proposal_num_to_fastrcnn_nms_thres = 0.5 # 最后fast rcnn分类的时候anchor的重合度大于0.5的分为正样本
+    proposal_nms_thres = 0.5  # nms的阈值
+    train_rpn_proposal_num_to_fastrcnn_after_nms = 128  # 从6000个中根据规则提取128个样本用于训练,其中32个正样本和96个负样本
+    roi_pooling_size = 7
+    anchor_start_point = np.array([7.5, 7.5])  # 因为下标从0开始,所以起始坐标是7.5 7.5
     anchor_step = 16
     rpn_total_cls_sample_num = 256  # 总共256个sample用于训练
     clsname_to_label = {'person': 0,
