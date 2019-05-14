@@ -7,6 +7,9 @@ from parameters import Parameters
 import utils
 import numpy as np
 import visdom
+import tools_visual
+import os
+from torchviz import make_dot, make_dot_from_trace
 
 
 class faster_rcc_net(torch.nn.Module):
@@ -42,19 +45,51 @@ class faster_rcc_net(torch.nn.Module):
 
         # ---- 计算一些anchor_info的东西
         # rpn_cls_loss_test = model.compute_rpn_cls_loss_test(anchor_labels)
-        rpn_cls_loss = model.compute_rpn_cls_loss(anchors_info)
+        rpn_cls_loss, train_rpn_cls_loss_index = model.compute_rpn_cls_loss(anchors_info)
         rpn_reg_loss = model.compute_rpn_reg_loss(anchors_info)
+        print('rpn_cls_loss : {}, rpn_reg_loss: {}'.format(rpn_cls_loss, rpn_reg_loss))
+
         # -------------rpn部分到上面已经结束了
         # rpn网络结束后将所有anchors做bbreg结果存入:anchors_info['anchors_location_after_rpn_reg']中
-        anchors_info = utils.do_bbreg_for_all_anchors(anchors_info, model.rpn_reg.cpu().detach().numpy())
+        anchors_info['anchors_location_after_rpn_reg'] = utils.do_bbreg_for_all_anchors(anchors_info, model.rpn_reg.cpu().detach().numpy())
         # 讲anchor中属于前景的anchor的概率计算出来,存入anchors_info['rpn_cls_foreground_score']中
         anchors_info['rpn_cls_foreground_score'] = (f.softmax(model.rpn_cls, dim=1)[:, 1]).cpu().detach().numpy()
+
+        # -----------------下面显示rpn前景得分最高的框-------------------
+        vis.close()
+        # 显示选择出来的rpn样本
+        img_show = img.cpu().numpy()
+        # ---------------显示最大得分的框
+        img_show_index = np.argmax(anchors_info['rpn_cls_foreground_score'])
+        img_show_rpn_max_box = [anchors_info['anchors_location'][img_show_index].astype(int)]
+        img_show_max_rpn_cls = tools_visual.show_torch_img_with_bblist(img_show, img_show_rpn_max_box)
+        #vis.images(img_show_max_rpn_cls, opts=dict(title='origin image', caption='How random.'))
+        #----------------显示gts
+        img_show_gts = tools_visual.show_torch_img_with_bblist(img_show, gts)
+        #vis.images(img_show_gts, opts=dict(title='origin image', caption='How random.'))
+        #----------------显示rpns
+        img_show_rpns_index = np.where(anchors_info['anchor_labels'] == 1)
+        img_show_rpns_boxs = anchors_info['anchors_location'][train_rpn_cls_loss_index]
+        img_show_rpns = tools_visual.show_torch_img_with_bblist(img_show,img_show_rpns_boxs)
+
+        vis_show_img = np.vstack((img_show_max_rpn_cls,img_show_gts,img_show_rpns))
+        vis.images(vis_show_img, opts=dict(title='origin image', caption='How random.'))  # rpn选择正负样本是没有错的
+
+        # -----------------用于画出得分最高的包围框---------------------
+
+
+
+
+
+
         # 根据anchors_info获取roi的相关信息
         roi = dict()
         roi['location'], roi['max_iou'], roi['gts'], roi['labels'] = utils.chose_rpn_proposal_train(anchors_info,gts,cls_name)
+
+
         # 这些roi的特征,是1个4维向量, n 512 7 7,其中n是roi的个数
-        if roi['location'].shape[1] == 0: # 如果没有好的样本,就只计算rpn的样本
-            return rpn_cls_loss + (10.0*rpn_reg_loss)
+        #if roi['location'].shape[1] == 0: # 如果没有好的样本,就只计算rpn的样本
+        return rpn_cls_loss # + (10.0*rpn_reg_loss)
         roi['feature_77'] = utils.compute_roi_pooling_from_rpn_proposal(roi['location'], model.backbone_featuremap)
         # 计算roi所应该移动的距离
         roi['reg_target'] = utils.get_tx_ty_tw_th_list_from_two_bblist(roi['gts'], roi['location'])
@@ -65,8 +100,9 @@ class faster_rcc_net(torch.nn.Module):
         fastrcnn_cls_loss = self.compute_fastrcnn_cls_loss(fastrcnn_cls, roi['labels'])
         fastrcnn_reg_loss = self.compute_fastrcnn_reg_loss(fastrcnn_reg, roi['reg_target'], roi['labels'])
 
-        total_loss = rpn_cls_loss + (10.0*rpn_reg_loss) + \
-                     fastrcnn_cls_loss + fastrcnn_reg_loss
+        print('fastrcnn_cls_loss : {}, fastrcnn_reg_loss: {}'.format(fastrcnn_cls_loss, fastrcnn_reg_loss))
+        total_loss = 0.1*rpn_cls_loss + rpn_reg_loss + \
+                     0.1*fastrcnn_cls_loss + fastrcnn_reg_loss
         return total_loss
 
 
@@ -97,7 +133,7 @@ class faster_rcc_net(torch.nn.Module):
         cls_sample = self.rpn_cls[train_index]
         rpn_cls_loss = f.cross_entropy(cls_sample.cuda(),
                                        torch.from_numpy(anchor_labels[train_index]).long().cuda())
-        return rpn_cls_loss
+        return rpn_cls_loss, train_index
 
     # 计算17100个anchor属于rpn前景的概率
     def compute_softmax_score_of_rpn_cls_object(self):
@@ -141,8 +177,13 @@ class faster_rcc_net(torch.nn.Module):
 
 
 if __name__ == '__main__':
-    # viz = visdom.Visdom()
+    vis = visdom.Visdom()
     model = faster_rcc_net().cuda()
+    # setup tracker
+    # net_path = '/home/fanfu/PycharmProjects/SimpleSiamFC/pretrained/siamfc_new'
+    net_pretrain_path = '/home/fanfu/PycharmProjects/MyFasterRcnn/mymodel/'
+    utils.read_net(net_pretrain_path, model)
+
     anchors = utils.gen_anchor_box()  # 生成原图中的anchor,函数没有问题,xmin ymin格式,包含各种不合法anchor
     # print(model.vgg_backbone)
     # print(model.vgg_cls)
@@ -154,23 +195,32 @@ if __name__ == '__main__':
     data_loader = torch.utils.data.DataLoader(dataset=dataset,
                                               batch_size=1,
                                               shuffle=True)
-    for img, class_name, anno in data_loader:
-        img = img.cuda()  # 提取图像
-        class_name_1 = class_name.squeeze(0).numpy()  # 1维的,图像中目标对应的种类
-        anno_numpy_2 = anno.squeeze(0).numpy()  # 图像中目标的gt
-        anchors_info = utils.get_anchors_info(anchors, anno_numpy_2, class_name_1)
-        # 为rpn打上标签,正样本为1,负样本为0,不可用样本为-1,结果存放在anchors_info中
-        anchors_info['anchor_labels'] = utils.get_rpn_train_sample_labels(anchors_info, anno_numpy_2, class_name_1)
-        # print(np.where(anchor_labels == 1))
-        # print(len(np.where(anchor_labels == 1)[0]))
-        total_loss = model(img, anchors_info, class_name_1, anno_numpy_2)  # 1 18 37 50
-        print(total_loss)
+    total_epoch = 50
+    for epoch in range(total_epoch):
+        step = 0
+        for img, class_name, anno in data_loader:
+            img = img.cuda()  # 提取图像
+            class_name_1 = class_name.squeeze(0).numpy()  # 1维的,图像中目标对应的种类
+            anno_numpy_2 = anno.squeeze(0).numpy()  # 图像中目标的gt
+            anchors_info = utils.get_anchors_info(anchors, anno_numpy_2, class_name_1)
+            # 为rpn打上标签,正样本为1,负样本为0,不可用样本为-1,结果存放在anchors_info中
+            anchors_info['anchor_labels'] = utils.get_rpn_train_sample_labels(anchors_info, anno_numpy_2, class_name_1)
+            # print(np.where(anchor_labels == 1))
+            # print(len(np.where(anchor_labels == 1)[0]))
+            total_loss = model(img, anchors_info, class_name_1, anno_numpy_2)  # 1 18 37 50
+            # 根据这些proposal提取特征做roipooling
+            # anchors_info =
+            optimizer.zero_grad()
+            total_loss.backward()
+            optimizer.step()
 
-        # 根据这些proposal提取特征做roipooling
-        # anchors_info =
-        optimizer.zero_grad()
-        total_loss.backward()
-        optimizer.step()
+            if step % 2000 == 0:
+                torch.save(model.state_dict(), '{}E{:0>2d}S{:0>10}.pkl'.format(net_pretrain_path, epoch, step))
+
+            step += 1
+            print('step is : ', step)
+
+
 
 
 

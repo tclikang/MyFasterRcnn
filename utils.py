@@ -7,6 +7,7 @@ import parameters
 import numpy as np
 import torch.nn.functional as f
 import random
+from torchviz import make_dot, make_dot_from_trace
 
 # -----------------------------------文件处理相关--------------------------------
 
@@ -49,6 +50,7 @@ def read_anno_in_xml_file(anno_path):
 # 图像左上角的起点坐标为0 0,右下角结束坐标为width-1, height-1
 def read_img(img_path):
     img = cv2.imread(img_path)
+    # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     return img
 
 
@@ -164,7 +166,7 @@ def get_rpn_train_cls_sample_index(anchor_labels):
     pre_index_neg = np.where(anchor_labels == 0)[0]  # 负样本的全部标签
     index_neg = np.random.choice(pre_index_neg, index_neg_num, replace=False)
     train_index = np.append(index_pos, index_neg)
-    return train_index
+    return train_index # correct
 
 # 获取用于训练rpn reg的正样本的index,全部的正样本都要训练
 def get_rpn_train_reg_sample_index(anchor_labels):
@@ -198,7 +200,8 @@ def extend_rpn_cls_or_reg_score_into_17100(batch_feature_map, total_anchor_num =
     res_tensor = torch.FloatTensor(total_anchor_num, flag)
     for i in range(total_anchor_num):
         row_id, col_id, anchor_index = [int(i) for i in get_row_col_from_featuremap(i)]
-        res_tensor[i, :] = batch_feature_map[0, flag * anchor_index:flag * (anchor_index + 1), row_id, col_id]
+        temp = batch_feature_map[0, flag * anchor_index:flag * (anchor_index + 1), row_id, col_id]
+        res_tensor[i] = temp
     return res_tensor
 
 
@@ -251,12 +254,14 @@ def get_rpn_train_sample_labels(anchors_info, gt, gt_labels):
     for i in range(gt_num):
         gt_index = np.where(anchors_info['anchors_corresponding_gt'] == gt[i])  # 与当前gt相同种类的bb集合索引
         gt_index = np.unique(gt_index[0])
+        if gt_index.shape[0] < 1:  # 没有与这个框相交最大的
+            continue
         max_iou_index = np.where(
             anchors_info['anchors_max_iou'][gt_index] == np.max(anchors_info['anchors_max_iou'][gt_index])
         )
         anchor_labels[gt_index[max_iou_index]] = 1
     assert np.where(anchor_labels == 1)[0].shape[0] > 0
-    print('rpn pos samples number is {}'.format(np.where(anchor_labels == 1)[0].shape[0]))
+    # print('rpn pos samples number is {}'.format(np.where(anchor_labels == 1)[0].shape[0]))
     return anchor_labels
 
 # 对anchor_info中的所有anchor做bbreg
@@ -270,8 +275,7 @@ def do_bbreg_for_all_anchors(anchors_info, bbreg_score):
         anchor = anchors_location[i,:]  # 获取一个锚点的位置
         reg = bbreg_score[i, :]
         anchors_location_after_rpn_reg[i,:] = bbreg_from_minmax_to_minmax(anchor, reg)
-    anchors_info['anchors_location_after_rpn_reg'] = anchors_location_after_rpn_reg
-    return anchors_info
+    return anchors_location_after_rpn_reg
 
 
 
@@ -371,6 +375,7 @@ def chose_rpn_proposal_train(anchors_info, gts, cls_names):
                 valid_index.append(index)
         return np.array(valid_index)
     valid_index = valid_index_of_pro(locations)
+    assert len(valid_index) > 0
     selected_rois, roi_max_iou, roi_gt, labels = get_labels_gt_iou_from_img(locations[valid_index], gts, cls_names)
     return selected_rois, roi_max_iou, roi_gt, labels
 
@@ -469,6 +474,7 @@ def bbreg_from_minmax_to_minmax(anchor, reg_score):
     anchor_minmax = bb_from_xywh_minmax(anchor_xywh_after_reg)
     return anchor_minmax
 
+
 # bb是一个xywh格式的包围框
 # reg_score是一个tx,ty,tw,th的变换
 # 返回一个xywh格式的包围框
@@ -479,7 +485,7 @@ def bbreg_xywhbb_trans(bb, reg_score):
     res_y = h * dy + y
     res_w = w * np.exp(dw)
     res_h = h * np.exp(dh)
-    return np.array([res_x,res_y,res_w,res_h])
+    return np.array([res_x, res_y, res_w, res_h])
 
 
 
@@ -579,6 +585,19 @@ def bb_from_xywh_minmax(bb):
     return np.array([xmin, ymin, xmax, ymax])
 
 
+
+# 讲最新的模型读入net,并删除老模型
+def read_net(filepath, net):
+    # 读取训练数据
+    if len(os.listdir(filepath)) > 0:  # 文件夹不为空
+        model_list = os.listdir(filepath)
+        model_list.sort()
+        model_path = filepath + model_list[-1]
+        net.load_state_dict(torch.load(model_path))
+        for name in model_list:
+            file_name = os.path.join(filepath, name)
+            os.remove(file_name)
+        torch.save(net.state_dict(), '{}0.pkl'.format(filepath))
 
 if __name__ == '__main__':
     #anno_path = '/home/fanfu/data/VOCtrainval_06-Nov-2007/VOCdevkit/VOC2007/Annotations/000005.xml'
