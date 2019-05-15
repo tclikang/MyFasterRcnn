@@ -25,7 +25,9 @@ class my_dataset(torch.utils.data.dataset.Dataset):
         img_resized, sh, sw = utils.img_resize(img, Parameters.resize_img_h, Parameters.resize_img_w)
         bb_resized = utils.anno_resize(bb,sh,sw,Parameters.resize_img_h, Parameters.resize_img_w)
         # utils.showimg_with_bb(img_resized,bb_resized)
-        img_resized = ttf.to_tensor(img_resized)  # 将图像放入tensor,归一化到0-1,n c h w
+        # img_resized = ttf.to_tensor(img_resized)*255 # np.array([122.7717, 115.9465, 102.9801]).reshape(3, 1, 1)  # 将图像放入tensor,归一化到0-1,n c h w
+        img_resized = (ttf.to_tensor(img_resized) * 255).float() - torch.from_numpy(
+            np.array([122.7717, 115.9465, 102.9801]).reshape(3, 1, 1)).float()
         cls_name = np.array(cls_name)
         bb_resized = np.array(bb_resized)
         # 返回一个600 800的图片,返回类别的名字,返回对应bb的位置

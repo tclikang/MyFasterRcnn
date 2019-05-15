@@ -224,16 +224,12 @@ if __name__ == '__main__':
     # setup tracker
     # net_path = '/home/fanfu/PycharmProjects/SimpleSiamFC/pretrained/siamfc_new'
     net_pretrain_path = '/home/fanfu/PycharmProjects/MyFasterRcnn/mymodel/'
-    model = utils.read_net(net_pretrain_path, model)
+    # model = utils.read_net(net_pretrain_path, model)
 
     anchors = utils.gen_anchor_box()  # 生成原图中的anchor,函数没有问题,xmin ymin格式,包含各种不合法anchor
     # print(model.vgg_backbone)
     # print(model.vgg_cls)
     dataset = ds.my_dataset()
-    optimizer = torch.optim.SGD(model.parameters(),
-                                0.01,
-                                0.9,
-                                5e-4)
     data_loader = torch.utils.data.DataLoader(dataset=dataset,
                                               batch_size=1,
                                               shuffle=True)
@@ -252,9 +248,6 @@ if __name__ == '__main__':
             total_loss = model(img, anchors_info, class_name_1, anno_numpy_2)  # 1 18 37 50
             # 根据这些proposal提取特征做roipooling
             # anchors_info =
-            optimizer.zero_grad()
-            total_loss.backward()
-            optimizer.step()
 
             if step % 50 == 0:
                 torch.save(model.state_dict(), '{}E{:0>2d}S{:0>10}.pkl'.format(net_pretrain_path, epoch, step))

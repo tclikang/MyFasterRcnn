@@ -197,11 +197,13 @@ def get_row_col_from_featuremap(index, rows=38, cols=50, anchor_num=9):
 # 返回一个[n 2]或者[n 4]的数据,其中n是17100个anchor
 def extend_rpn_cls_or_reg_score_into_17100(batch_feature_map, total_anchor_num = 17100):
     flag = int(batch_feature_map.shape[1] / parameters.Parameters.anchors_num)
-    res_tensor = torch.FloatTensor(total_anchor_num, flag)
-    for i in range(total_anchor_num):
-        row_id, col_id, anchor_index = [int(i) for i in get_row_col_from_featuremap(i)]
-        temp = batch_feature_map[0, flag * anchor_index:flag * (anchor_index + 1), row_id, col_id]
-        res_tensor[i] = temp
+    # res_tensor = torch.FloatTensor(total_anchor_num, flag)
+    # for i in range(total_anchor_num):
+    #     row_id, col_id, anchor_index = [int(i) for i in get_row_col_from_featuremap(i)]
+    #     temp = batch_feature_map[0, flag * anchor_index:flag * (anchor_index + 1), row_id, col_id]
+    #     res_tensor[i] = temp
+
+    res_tensor = batch_feature_map.permute(0, 2, 3, 1).contiguous().view(1, -1, flag).squeeze(0)  # 已验证,相同
     return res_tensor
 
 
@@ -562,24 +564,27 @@ def get_tx_ty_tw_th_from_two_bb(gt, anchor):
     th = np.log(gt_xywh[3] / anchor_xywh[3])
     return np.array([tx, ty, tw, th])
 
+# xywh的xy是中心而不是左上角
 def bb_from_minmax_xywh(bb):
     xmin = bb[0]
     ymin = bb[1]
     xmax = bb[2]
     ymax = bb[3]
-    x = xmin
-    y = ymin
+    x = (xmin + xmax) / 2
+    y = (ymin + ymax) / 2
     w = xmax - x + 1
     h = ymax - y + 1
     return np.array([x, y, w, h])
 
+
+# xywh中的xy是中心点,而不是左上角的点
 def bb_from_xywh_minmax(bb):
     x = bb[0]
     y = bb[1]
     w = bb[2]
     h = bb[3]
-    xmin = x
-    ymin = y
+    xmin = x - (w-1)/2
+    ymin = y - (h-1)/2
     xmax = xmin + w - 1
     ymax = ymin + h - 1
     return np.array([xmin, ymin, xmax, ymax])
@@ -598,6 +603,7 @@ def read_net(filepath, net):
             file_name = os.path.join(filepath, name)
             os.remove(file_name)
         torch.save(net.state_dict(), '{}0.pkl'.format(filepath))
+        return net
 
 if __name__ == '__main__':
     #anno_path = '/home/fanfu/data/VOCtrainval_06-Nov-2007/VOCdevkit/VOC2007/Annotations/000005.xml'
