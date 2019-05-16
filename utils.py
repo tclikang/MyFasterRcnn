@@ -222,9 +222,9 @@ def get_anchors_info(anchors, gt, cls_name):
     anchors_corresponding_class = 20 * np.ones((n,))  # 每个锚点对应的种类
     for i in range(n):
         temp_anch = anchors[i,:]  # 拿出一个锚点
-        if is_valid_bbx(temp_anch) is not True:
-            anchors_max_iou[i] = -1.0
-            continue
+        #if is_valid_bbx(temp_anch) is not True:
+            # anchors_max_iou[i] = -1.0
+            # continue
         for j in range(object_num):
             temp_object = gt[j, :]  # 拿出一个gt
             iou = compute_iou(temp_anch, temp_object)  # 计算iou
@@ -249,7 +249,7 @@ def get_rpn_train_sample_labels(anchors_info, gt, gt_labels):
     anchor_labels = (-1.0) * np.ones_like(anchors_info['anchors_max_iou'])  # 初始化为什么都不能用的样本
     iou_7 = np.where(anchors_info['anchors_max_iou'] >= 0.7)  # 大于0.7的都是正样本
     anchor_labels[iou_7] = 1  # 重合度大于0.7可以作为正样本
-    iou_3 = np.where((anchors_info['anchors_max_iou'] <= 0.3) & (anchors_info['anchors_max_iou'] >= 0))  # 小于0.3的都是正样本
+    iou_3 = np.where((anchors_info['anchors_max_iou'] <= 0.3) & (anchors_info['anchors_max_iou'] >= 0))  # 小于0.3的都是负样本
     anchor_labels[iou_3] = 0  # 小于0.3可以作为负样本
     # 该张图片中总共有gt_num个目标
     gt_num = gt.shape[0]
@@ -276,6 +276,8 @@ def do_bbreg_for_all_anchors(anchors_info, bbreg_score):
     for i in range(n):
         anchor = anchors_location[i,:]  # 获取一个锚点的位置
         reg = bbreg_score[i, :]
+        reg = np.array([reg[1], reg[0], reg[3], reg[2]])  # 这里是要改回来的呀,这里看一下原版是怎么做的 dx dy dw dh
+        # bbreg_from_minmax_to_minmax这个函数是正确的
         anchors_location_after_rpn_reg[i,:] = bbreg_from_minmax_to_minmax(anchor, reg)
     return anchors_location_after_rpn_reg
 
@@ -373,8 +375,8 @@ def chose_rpn_proposal_train(anchors_info, gts, cls_names):
     def valid_index_of_pro(locations):
         valid_index = []
         for index, loc in enumerate(locations):
-            if is_valid_bbx(loc):
-                valid_index.append(index)
+            #if is_valid_bbx(loc):  # 全部的都合适
+            valid_index.append(index)
         return np.array(valid_index)
     valid_index = valid_index_of_pro(locations)
     assert len(valid_index) > 0
@@ -429,11 +431,15 @@ def compute_roi_pooling_from_rpn_proposal(roi_loc, featuremap_conv53):
     for proposal in train_proposal_into_fastrcnn:
         xmin_fm, ymin_fm, xmax_fm, ymax_fm = [np.floor(i).astype(int) for i in
                                               (proposal / parameters.Parameters.anchor_step)]  # proposal在特征图中的坐标
+        xmin_fm = max(0, xmin_fm)
+        ymin_fm = max(0, ymin_fm)
+        xmax_fm = min(49, xmax_fm)
+        ymax_fm = min(37, ymax_fm)
         temp_feature_map = featuremap_conv53[:, :, ymin_fm:ymax_fm + 1, xmin_fm:xmax_fm + 1]
-        assert xmin_fm >= 0
-        assert ymin_fm >= 0
-        assert xmax_fm < 50
-        assert ymax_fm < 38
+        # assert xmin_fm >= 0
+        # assert ymin_fm >= 0
+        # assert xmax_fm < 50
+        # assert ymax_fm < 38
         if roipooling_feature77 is None:
             roipooling_feature77 = f.adaptive_max_pool2d(temp_feature_map, parameters.Parameters.roi_pooling_size)
         else:
@@ -572,8 +578,8 @@ def bb_from_minmax_xywh(bb):
     ymax = bb[3]
     x = (xmin + xmax) / 2
     y = (ymin + ymax) / 2
-    w = xmax - x + 1
-    h = ymax - y + 1
+    w = xmax - xmin + 1
+    h = ymax - ymin + 1
     return np.array([x, y, w, h])
 
 
@@ -613,9 +619,13 @@ if __name__ == '__main__':
     #img2, sh, sw = img_resize(img, 800, 2000)
     #print(sh, sw)
     #showimg(img2)
+    anchor = np.array([-82.50967 ,-37.254833,   98.50967,     53.254833])  # ymin xmin ymax xmax
+    reg = np.array([-0.11372066,0.04183003 , -0.44202712,  -0.1670937])  # y x h w
+    res = bbreg_from_minmax_to_minmax(anchor, reg)  #  706.9256, 401.58728, 886.53973, 781.46106
+    print(res)
 
-    r, c, a = get_row_col_from_featuremap(9999)
-    print(r,c,a)
+
+
 
 
 

@@ -53,7 +53,7 @@ def show_torch_img_with_bblist(torch_img, bblist):
     # showimg(out_list[0])
     out_list = bgr_to_rgb(out_list)
     out_list = hwcimg_to_chwimg(out_list)
-    out_list[0][np.where(out_list[0] > 1.0)] = 1.0
+    # out_list[0][np.where(out_list[0] > 1.0)] = 1.0
     nchw_img = list_to_torch(out_list)
     return nchw_img
 

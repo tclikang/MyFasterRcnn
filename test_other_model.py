@@ -97,6 +97,28 @@ class faster_rcc_net(torch.nn.Module):
         # 讲anchor中属于前景的anchor的概率计算出来,存入anchors_info['rpn_cls_foreground_score']中
         anchors_info['rpn_cls_foreground_score'] = (f.softmax(self.rpn_cls, dim=1)[:, 1]).cpu().detach().numpy()
 
+        # 根据anchors_info获取roi的相关信息
+        roi = dict()
+        roi['location'], roi['max_iou'], roi['gts'], roi['labels'] = utils.chose_rpn_proposal_train(anchors_info,gts,cls_name)
+        img_show_index = np.argmax(anchors_info['rpn_cls_foreground_score'])
+        roi['location'] = np.vstack((roi['location'], anchors_info['anchors_location_after_rpn_reg'][img_show_index]))
+
+        # 这些roi的特征,是1个4维向量, n 512 7 7,其中n是roi的个数
+        #if roi['location'].shape[1] == 0: # 如果没有好的样本,就只计算rpn的样本
+        # return rpn_cls_loss # + (10.0*rpn_reg_loss)
+        roi['feature_77'] = utils.compute_roi_pooling_from_rpn_proposal(roi['location'], model.backbone_featuremap)
+        # 计算roi所应该移动的距离
+        roi['reg_target'] = utils.get_tx_ty_tw_th_list_from_two_bblist(roi['gts'], roi['location'])
+        node_feature_map = self.vgg_cls(
+            roi['feature_77'].view(roi['feature_77'].shape[0], -1))
+        fastrcnn_cls = self.fastrcnn_cls(node_feature_map)  # n 21 ,n是样本数
+        fastrcnn_reg = self.fastrcnn_reg(node_feature_map)  # n 84
+        #fastrcnn_cls_loss = self.compute_fastrcnn_cls_loss(fastrcnn_cls, roi['labels'])
+        #fastrcnn_reg_loss = self.compute_fastrcnn_reg_loss(fastrcnn_reg, roi['reg_target'], roi['labels'])
+
+        # print('fastrcnn_cls_loss : {}, fastrcnn_reg_loss: {}'.format(fastrcnn_cls_loss, fastrcnn_reg_loss))
+        #total_loss = 0.1*rpn_cls_loss + rpn_reg_loss + 0.1*fastrcnn_cls_loss + fastrcnn_reg_loss
+
         # -----------------下面显示rpn前景得分最高的框-------------------
         vis.close()
         # 显示选择出来的rpn样本
@@ -105,16 +127,34 @@ class faster_rcc_net(torch.nn.Module):
         img_show_index = np.argmax(anchors_info['rpn_cls_foreground_score'])
         img_show_rpn_max_box = [anchors_info['anchors_location'][img_show_index].astype(int)]
         img_show_max_rpn_cls = tools_visual.show_torch_img_with_bblist(img_show, img_show_rpn_max_box)
-        #vis.images(img_show_max_rpn_cls, opts=dict(title='origin image', caption='How random.'))
-        #----------------显示gts
+        # vis.images(img_show_max_rpn_cls, opts=dict(title='origin image', caption='How random.'))
+        # -------------显示rpn reg之后的bbox
+        img_show_rpn_max_box_after_reg = [anchors_info['anchors_location_after_rpn_reg'][img_show_index].astype(int)]
+        img_show_rpn_max_box_after_reg = tools_visual.show_torch_img_with_bblist(img_show,
+                                                                                 img_show_rpn_max_box_after_reg)
+        # --------显示最后的分类,然后再做一次reg
+
+        temp = np.where(roi['location'] == anchors_info['anchors_location_after_rpn_reg'][img_show_index])
+        max_rpn_roi_index = temp[0][0]  # 最大的roi对应的在roi中的位置
+        print(max_rpn_roi_index)
+        roi_class = np.argmax(fastrcnn_cls[max_rpn_roi_index].detach().cpu().numpy())                 # 对应的类别
+        roi_location = roi['location'][max_rpn_roi_index]
+        roi_reg_score = fastrcnn_reg[max_rpn_roi_index][roi_class*4:(roi_class+1)*4].detach().cpu().numpy()
+        roi_reg_score = np.array([roi_reg_score[1]*0.1,roi_reg_score[0]*0.1,roi_reg_score[3]*0.2,roi_reg_score[2]*0.2])
+        roi_show = [utils.bbreg_from_minmax_to_minmax(roi_location, roi_reg_score)]
+        roi_to_show_after_reg = tools_visual.show_torch_img_with_bblist(img_show, roi_show)
+        roi_location_before_reg = tools_visual.show_torch_img_with_bblist(img_show, [roi_location])
+
+        # ----------------显示gts
         img_show_gts = tools_visual.show_torch_img_with_bblist(img_show, gts)
-        #vis.images(img_show_gts, opts=dict(title='origin image', caption='How random.'))
-        #----------------显示rpns
+        # vis.images(img_show_gts, opts=dict(title='origin image', caption='How random.'))
+        # ----------------显示rpns
         img_show_rpns_index = np.where(anchors_info['anchor_labels'] == 1)
         img_show_rpns_boxs = anchors_info['anchors_location'][img_show_rpns_index]
-        img_show_rpns = tools_visual.show_torch_img_with_bblist(img_show,img_show_rpns_boxs)
-
-        vis_show_img = np.vstack((img_show_max_rpn_cls,img_show_gts,img_show_rpns))
+        img_show_rpns = tools_visual.show_torch_img_with_bblist(img_show, img_show_rpns_boxs)
+        # img_show_max_rpn_cls 只有这一张正确, 也就是说reg那一块是错误的,只有rpn分类是正确的
+        vis_show_img = np.vstack((roi_location_before_reg, roi_to_show_after_reg, img_show_max_rpn_cls,
+                                  img_show_rpn_max_box_after_reg, img_show_gts, img_show_rpns))
         vis.images(vis_show_img, opts=dict(title='origin image', caption='How random.'))  # rpn选择正负样本是没有错的
         g = make_dot(rpn_cls_loss)
         # -----------------用于画出得分最高的包围框---------------------
@@ -124,28 +164,12 @@ class faster_rcc_net(torch.nn.Module):
 
 
 
-        # 根据anchors_info获取roi的相关信息
-        roi = dict()
-        roi['location'], roi['max_iou'], roi['gts'], roi['labels'] = utils.chose_rpn_proposal_train(anchors_info,gts,cls_name)
 
 
-        # 这些roi的特征,是1个4维向量, n 512 7 7,其中n是roi的个数
-        #if roi['location'].shape[1] == 0: # 如果没有好的样本,就只计算rpn的样本
-        return rpn_cls_loss # + (10.0*rpn_reg_loss)
-        roi['feature_77'] = utils.compute_roi_pooling_from_rpn_proposal(roi['location'], model.backbone_featuremap)
-        # 计算roi所应该移动的距离
-        roi['reg_target'] = utils.get_tx_ty_tw_th_list_from_two_bblist(roi['gts'], roi['location'])
-        node_feature_map = self.vgg_cls(
-            roi['feature_77'].view(roi['feature_77'].shape[0], -1))
-        fastrcnn_cls = self.fastrcnn_cls(node_feature_map)
-        fastrcnn_reg = self.fastrcnn_reg(node_feature_map)
-        fastrcnn_cls_loss = self.compute_fastrcnn_cls_loss(fastrcnn_cls, roi['labels'])
-        fastrcnn_reg_loss = self.compute_fastrcnn_reg_loss(fastrcnn_reg, roi['reg_target'], roi['labels'])
 
-        print('fastrcnn_cls_loss : {}, fastrcnn_reg_loss: {}'.format(fastrcnn_cls_loss, fastrcnn_reg_loss))
-        total_loss = 0.1*rpn_cls_loss + rpn_reg_loss + \
-                     0.1*fastrcnn_cls_loss + fastrcnn_reg_loss
-        return total_loss
+
+
+        #return total_loss
 
 
 
